@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { WHEEL_COLORS } from "@/lib/colors";
 import {
   WHEEL_MAX_PLAYERS,
   TOKEN_TICKER,
   RAFFLE_TICKET_PRICE,
+  SOL_USD,
 } from "@/lib/config";
 import { useStats } from "@/lib/stats-store";
 
@@ -19,7 +20,16 @@ type Player = {
 
 type Phase = "lobby" | "spinning" | "result";
 
-const SLOT_COUNT = WHEEL_COLORS.length; // always 15
+const SLOT_COUNT = WHEEL_COLORS.length; // 15
+const LOBBY_DURATION_S = 120;
+const RESULT_COUNTDOWN_S = 6;
+const BOT_REFILL_MS = 7000;
+
+function formatMMSS(s: number) {
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${r.toString().padStart(2, "0")}`;
+}
 
 const BOT_NAMES = [
   "pixL_kid", "ape0x", "neonNyx", "0xMochi", "sunny.sol",
@@ -70,13 +80,14 @@ function genBots(count: number, taken: Set<number>): Player[] {
 
 export function WheelGame() {
   const { publicKey } = useWallet();
-  const { recordRound } = useStats();
+  const { recordRound, recordWinner, recentWinners } = useStats();
 
   const [phase, setPhase] = useState<Phase>("lobby");
   const [players, setPlayers] = useState<Player[]>(() => {
     const used = new Set<number>();
     return genBots(6, used);
   });
+  const [selected, setSelected] = useState<number | null>(null);
   const [spinDeg, setSpinDeg] = useState(0);
   const [winnerSlot, setWinnerSlot] = useState<number | null>(null);
   const [lastPayout, setLastPayout] = useState<{
@@ -93,7 +104,6 @@ export function WheelGame() {
     [players],
   );
 
-  // Always 15 equal slices, indexed by WHEEL_COLORS[i].
   const slices = useMemo(() => {
     const perSlice = 360 / SLOT_COUNT;
     return WHEEL_COLORS.map((color, i) => {
@@ -112,62 +122,95 @@ export function WheelGame() {
     () => players.filter((p) => p.isMe).map((p) => p.colorIdx),
     [players],
   );
-  const takenSlots = useMemo(
-    () => new Set(players.map((p) => p.colorIdx)),
-    [players],
-  );
 
-  const buySlot = (colorIdx: number) => {
-    if (phase !== "lobby") return;
-    if (takenSlots.has(colorIdx)) return;
+  const meHasTicket = players.some((p) => p.isMe);
+
+  const buyTicket = () => {
+    if (phase !== "lobby" || selected === null) return;
+    if (meHasTicket) return; // 1 ticket per wallet per round
+    const taken = players.some((p) => p.colorIdx === selected);
+    if (taken) {
+      setSelected(null);
+      return;
+    }
     setPlayers((cur) => [
       ...cur,
       {
-        id: `me-${colorIdx}-${Math.random().toString(36).slice(2, 6)}`,
+        id: `me-${selected}-${Math.random().toString(36).slice(2, 6)}`,
         name: shortAddress(publicKey?.toBase58()),
-        colorIdx,
+        colorIdx: selected,
         isMe: true,
       },
     ]);
+    setSelected(null);
   };
 
-  const leaveSlot = (colorIdx: number) => {
+  const releaseSlot = (colorIdx: number) => {
     if (phase !== "lobby") return;
     setPlayers((cur) =>
       cur.filter((p) => !(p.isMe && p.colorIdx === colorIdx)),
     );
   };
 
-  const addBot = () => {
-    if (players.length >= WHEEL_MAX_PLAYERS) return;
-    setPlayers((cur) => [
-      ...cur,
-      ...genBots(1, new Set(cur.map((p) => p.colorIdx))),
-    ]);
-  };
+  const spin = useCallback(() => {
+    setPhase((prev) => {
+      if (prev !== "lobby") return prev;
+      recordedRef.current = false;
 
-  const spin = () => {
+      const winningIdx = Math.floor(Math.random() * SLOT_COUNT);
+      setWinnerSlot(winningIdx);
+
+      const perSlice = 360 / SLOT_COUNT;
+      const start = winningIdx * perSlice;
+      const end = (winningIdx + 1) * perSlice;
+      const sliceMid = (start + end) / 2;
+      const turns = 6 + Math.floor(Math.random() * 3);
+      const settle =
+        360 - sliceMid + (Math.random() * 0.6 - 0.3) * (end - start);
+      const target = turns * 360 + settle;
+      setSpinDeg(target);
+      window.setTimeout(() => setPhase("result"), 3200);
+      return "spinning";
+    });
+  }, []);
+
+  const spinRef = useRef(spin);
+  spinRef.current = spin;
+
+  // Lobby countdown — wheel auto-spins every 2 minutes.
+  const [lobbyCountdown, setLobbyCountdown] = useState<number | null>(null);
+  useEffect(() => {
+    if (phase !== "lobby") {
+      setLobbyCountdown(null);
+      return;
+    }
+    setLobbyCountdown(LOBBY_DURATION_S);
+    const startedAt = Date.now();
+    const tick = window.setInterval(() => {
+      const remaining =
+        LOBBY_DURATION_S - Math.floor((Date.now() - startedAt) / 1000);
+      if (remaining <= 0) {
+        window.clearInterval(tick);
+        setLobbyCountdown(0);
+        spinRef.current?.();
+      } else {
+        setLobbyCountdown(remaining);
+      }
+    }, 250);
+    return () => window.clearInterval(tick);
+  }, [phase]);
+
+  // Quiet bot fill so empty slots get bought during the countdown.
+  useEffect(() => {
     if (phase !== "lobby") return;
-    recordedRef.current = false;
-
-    // Uniform random across all 15 slots, regardless of ownership.
-    const winningIdx = Math.floor(Math.random() * SLOT_COUNT);
-    setWinnerSlot(winningIdx);
-
-    const winSlice = slices[winningIdx];
-    const sliceMid = (winSlice.start + winSlice.end) / 2;
-    const turns = 6 + Math.floor(Math.random() * 3);
-    const settle =
-      360 -
-      sliceMid +
-      (Math.random() * 0.6 - 0.3) * (winSlice.end - winSlice.start);
-    const target = turns * 360 + settle;
-    setPhase("spinning");
-    setSpinDeg(target);
-    window.setTimeout(() => {
-      setPhase("result");
-    }, 3200);
-  };
+    const t = window.setInterval(() => {
+      setPlayers((cur) => {
+        if (cur.length >= SLOT_COUNT - 1) return cur;
+        return [...cur, ...genBots(1, new Set(cur.map((p) => p.colorIdx)))];
+      });
+    }, BOT_REFILL_MS);
+    return () => window.clearInterval(t);
+  }, [phase]);
 
   useEffect(() => {
     if (phase !== "result" || winnerSlot === null || recordedRef.current) return;
@@ -182,22 +225,57 @@ export function WheelGame() {
       houseWin,
       winner: owner,
     });
-  }, [phase, winnerSlot, totalPot, players, recordRound]);
+    const colour = WHEEL_COLORS[winnerSlot];
+    recordWinner({
+      game: "wheel",
+      pot: totalPot,
+      unit: "USD",
+      winnerLabel: houseWin ? "HOUSE" : owner!.name,
+      isMe: !!owner?.isMe,
+      houseWin,
+      badge: { name: colour.name, hex: colour.hex },
+    });
+  }, [phase, winnerSlot, totalPot, players, recordRound, recordWinner]);
 
-  const nextRound = () => {
+  const nextRound = useCallback(() => {
     setPhase("lobby");
     setWinnerSlot(null);
     setLastPayout(null);
     setSpinDeg(0);
+    setSelected(null);
     const used = new Set<number>();
     setPlayers(genBots(5 + Math.floor(Math.random() * 4), used));
-  };
+  }, []);
+
+  // Auto-advance into the next 2-minute countdown after a brief result view.
+  const [resultCountdown, setResultCountdown] = useState<number | null>(null);
+  useEffect(() => {
+    if (phase !== "result") {
+      setResultCountdown(null);
+      return;
+    }
+    setResultCountdown(RESULT_COUNTDOWN_S);
+    const startedAt = Date.now();
+    const tick = window.setInterval(() => {
+      const remaining =
+        RESULT_COUNTDOWN_S - Math.floor((Date.now() - startedAt) / 1000);
+      if (remaining <= 0) {
+        window.clearInterval(tick);
+        setResultCountdown(0);
+        nextRound();
+      } else {
+        setResultCountdown(remaining);
+      }
+    }, 250);
+    return () => window.clearInterval(tick);
+  }, [phase, nextRound]);
 
   const winningColor =
     winnerSlot !== null ? WHEEL_COLORS[winnerSlot] : null;
   const equalOdds = 100 / SLOT_COUNT;
   const filledSlots = players.length;
   const emptySlots = SLOT_COUNT - filledSlots;
+  const selectedColor = selected !== null ? WHEEL_COLORS[selected] : null;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
@@ -205,13 +283,30 @@ export function WheelGame() {
       <div className="pixel-card p-5 flex flex-col items-center gap-4">
         <div className="flex items-center justify-between w-full">
           <span className="pixel-chip bg-arena-lemon">ROOM 01</span>
-          <span className="text-[10px]">
-            POT: <b>${totalPot.toFixed(2)}</b>
-          </span>
           <span className="pixel-chip bg-arena-mint">
             {filledSlots}/{SLOT_COUNT} SOLD
           </span>
         </div>
+
+        <div className="w-full bg-arena-gold border-4 border-arena-ink shadow-pixelSm py-2 px-3 flex items-center justify-center gap-3">
+          <span className="text-[8px] tracking-wider opacity-70">PRIZE</span>
+          <span className="text-[18px] md:text-[20px] tracking-wider font-bold leading-none">
+            {totalPot.toFixed(2)} SOL
+          </span>
+          <span className="text-[9px] opacity-80">
+            ≈ ${(totalPot * SOL_USD).toFixed(2)}
+          </span>
+        </div>
+
+        {phase === "lobby" && lobbyCountdown !== null && (
+          <div className="w-full bg-arena-ink text-arena-lemon border-4 border-arena-ink shadow-pixelSm p-3 flex items-center justify-between gap-3">
+            <span className="text-[10px] tracking-wider">SPIN IN</span>
+            <span className="text-[20px] tracking-widest font-bold">
+              {formatMMSS(lobbyCountdown)}
+            </span>
+            <span className="text-[9px] opacity-70">auto-spin</span>
+          </div>
+        )}
 
         <div className="relative w-[320px] h-[320px] md:w-[420px] md:h-[420px]">
           {/* Pointer */}
@@ -275,61 +370,53 @@ export function WheelGame() {
           </svg>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 w-full">
-          <button
-            disabled={phase !== "lobby"}
-            onClick={spin}
-            className="pixel-btn !bg-arena-rose text-white"
-          >
-            SPIN ▶
-          </button>
-          <button
-            disabled={
-              phase === "spinning" || players.length >= WHEEL_MAX_PLAYERS
-            }
-            onClick={addBot}
-            className="pixel-btn !bg-arena-aqua"
-          >
-            + ADD BOT
-          </button>
-        </div>
-
         {phase === "result" && lastPayout && winningColor && (
           <div className="w-full bg-arena-mint border-4 border-arena-ink shadow-pixelSm p-3 text-[10px] leading-relaxed">
-            <div className="text-[12px] mb-1 flex items-center gap-2">
-              <span
-                className="pixel-chip"
-                style={{ background: winningColor.hex }}
-              >
-                {winningColor.name}
-              </span>
-              <span>
-                {lastPayout.houseWin
-                  ? "🔥 EMPTY SLOT"
-                  : `🏆 ${lastPayout.winner!.name}`}
-              </span>
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-[12px] flex items-center gap-2">
+                <span
+                  className="pixel-chip"
+                  style={{ background: winningColor.hex }}
+                >
+                  {winningColor.name}
+                </span>
+                <span>
+                  {lastPayout.houseWin
+                    ? "🔥 EMPTY SLOT"
+                    : `🏆 ${lastPayout.winner!.name}`}
+                </span>
+              </div>
+              {resultCountdown !== null && (
+                <span className="pixel-chip bg-arena-gold text-[9px]">
+                  NEXT IN {resultCountdown}s
+                </span>
+              )}
             </div>
             {lastPayout.houseWin ? (
               <div className="text-arena-rose">
                 Nobody bought this slot — entire pot{" "}
-                <b>${lastPayout.pot.toFixed(2)}</b> routed to buyback + burn
-                ({lastPayout.burn.toFixed(4)} {TOKEN_TICKER}).
+                <b>
+                  {lastPayout.pot.toFixed(2)} SOL (≈ $
+                  {(lastPayout.pot * SOL_USD).toFixed(2)})
+                </b>{" "}
+                sent to the treasury for buybacks (
+                {lastPayout.burn.toFixed(4)} {TOKEN_TICKER}).
               </div>
             ) : (
               <>
-                <div>POT: ${lastPayout.pot.toFixed(2)}</div>
-                <div>PAYOUT (95%): ${lastPayout.payout.toFixed(2)}</div>
+                <div>
+                  POT: {lastPayout.pot.toFixed(2)} SOL (≈ $
+                  {(lastPayout.pot * SOL_USD).toFixed(2)})
+                </div>
+                <div>
+                  PAYOUT (95%): <b>{lastPayout.payout.toFixed(3)} SOL</b> (≈ $
+                  {(lastPayout.payout * SOL_USD).toFixed(2)})
+                </div>
                 <div>
                   BURN (5%): {lastPayout.burn.toFixed(4)} {TOKEN_TICKER}
                 </div>
               </>
             )}
-            <button
-              onClick={nextRound}
-              className="pixel-btn !bg-arena-gold mt-2"
-            >
-              NEXT ROUND ↻
-            </button>
           </div>
         )}
       </div>
@@ -337,70 +424,140 @@ export function WheelGame() {
       {/* RIGHT PANEL */}
       <div className="flex flex-col gap-4">
         <div className="pixel-card p-5 flex flex-col gap-3">
-          <h3 className="text-[12px] tracking-wider">BUY A TICKET</h3>
+          <h3 className="text-[12px] tracking-wider">PICK YOUR COLOUR</h3>
           <p className="text-[9px] opacity-70 leading-relaxed">
             15 colour slots, every spin. Flat{" "}
             <b>1/{SLOT_COUNT} = {equalOdds.toFixed(1)}%</b> chance per slot.
-            Pick an unsold colour for <b>${RAFFLE_TICKET_PRICE.toFixed(2)}</b>.
-            If an empty slot wins, the entire pot goes to buyback + burn —{" "}
-            currently <b>{emptySlots}/{SLOT_COUNT} empty</b> ={" "}
+            Tap an unsold colour to select it, then hit BUY TICKET for{" "}
+            <b>{RAFFLE_TICKET_PRICE.toFixed(2)} SOL</b>. If an empty slot wins
+            the entire pot goes to the treasury for buybacks. Currently{" "}
+            <b>{emptySlots}/{SLOT_COUNT} empty</b> ={" "}
             {((emptySlots / SLOT_COUNT) * 100).toFixed(1)}% house odds.
           </p>
           {phase === "lobby" ? (
-            <div className="grid grid-cols-5 gap-2">
-              {WHEEL_COLORS.map((c, i) => {
-                const owner = players.find((p) => p.colorIdx === i);
-                const mine = !!owner?.isMe;
-                const taken = !!owner && !mine;
-                return (
-                  <button
-                    key={c.hex}
-                    onClick={() => (mine ? leaveSlot(i) : buySlot(i))}
-                    disabled={taken}
-                    title={
-                      mine
-                        ? `${c.name} — yours (click to release)`
-                        : taken
-                          ? `${c.name} — taken by ${owner!.name}`
-                          : `${c.name} — buy for $${RAFFLE_TICKET_PRICE.toFixed(2)}`
-                    }
-                    className={`h-12 border-4 border-arena-ink shadow-pixelSm relative ${
-                      taken ? "opacity-40 cursor-not-allowed" : ""
-                    } ${
-                      mine
-                        ? "ring-4 ring-arena-ink ring-offset-2 ring-offset-arena-panel"
-                        : ""
-                    }`}
-                    style={{ background: c.hex }}
-                  >
-                    {mine && (
-                      <span className="absolute inset-0 grid place-items-center text-[10px]">
-                        ★
-                      </span>
-                    )}
-                    {taken && (
-                      <span className="absolute inset-0 grid place-items-center text-[8px] opacity-70">
-                        🤖
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
+            <>
+              <div className="grid grid-cols-5 gap-2">
+                {WHEEL_COLORS.map((c, i) => {
+                  const owner = players.find((p) => p.colorIdx === i);
+                  const mine = !!owner?.isMe;
+                  const taken = !!owner && !mine;
+                  const isSelected = selected === i;
+                  return (
+                    <button
+                      key={c.hex}
+                      onClick={() => {
+                        if (mine) {
+                          releaseSlot(i);
+                          return;
+                        }
+                        if (taken) return;
+                        if (meHasTicket) return;
+                        setSelected((cur) => (cur === i ? null : i));
+                      }}
+                      disabled={taken || (meHasTicket && !mine)}
+                      title={
+                        mine
+                          ? `${c.name} — yours (click to release)`
+                          : taken
+                            ? `${c.name} — taken by ${owner!.name}`
+                            : isSelected
+                              ? `${c.name} — selected (click again to clear)`
+                              : `${c.name} — tap to select`
+                      }
+                      className={`h-12 border-4 border-arena-ink shadow-pixelSm relative ${
+                        taken ? "opacity-40 cursor-not-allowed" : ""
+                      } ${
+                        mine || isSelected
+                          ? "ring-4 ring-arena-ink ring-offset-2 ring-offset-arena-panel"
+                          : ""
+                      }`}
+                      style={{ background: c.hex }}
+                    >
+                      {mine && (
+                        <span className="absolute inset-0 grid place-items-center text-[10px]">
+                          ★
+                        </span>
+                      )}
+                      {isSelected && !mine && (
+                        <span className="absolute inset-0 grid place-items-center text-[10px]">
+                          ✦
+                        </span>
+                      )}
+                      {taken && (
+                        <span className="absolute inset-0 grid place-items-center text-[8px] opacity-70">
+                          🤖
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="bg-arena-lemon border-4 border-arena-ink shadow-pixelSm p-2 text-[10px] flex items-center justify-between">
+                <span>
+                  SELECTED:{" "}
+                  <b>{selectedColor ? selectedColor.name : "—"}</b>
+                </span>
+                <span>
+                  PRICE <b>{RAFFLE_TICKET_PRICE.toFixed(2)} SOL</b>
+                </span>
+              </div>
+
+              <button
+                onClick={buyTicket}
+                disabled={
+                  meHasTicket ||
+                  selected === null ||
+                  players.some((p) => p.colorIdx === selected)
+                }
+                className="pixel-btn !bg-arena-gold"
+              >
+                {meHasTicket
+                  ? "TICKET OWNED · 1 PER ROUND"
+                  : `BUY TICKET · ${RAFFLE_TICKET_PRICE.toFixed(2)} SOL`}
+              </button>
+
+              {meSlots.length > 0 && (
+                <div className="bg-arena-mint border-4 border-arena-ink shadow-pixelSm p-2 text-[10px] flex items-center justify-between">
+                  <span>
+                    YOUR SLOTS: <b>{meSlots.length}</b> · ODDS{" "}
+                    <b>{(meSlots.length * equalOdds).toFixed(1)}%</b>
+                  </span>
+                  <span>
+                    SPENT{" "}
+                    <b>${(meSlots.length * RAFFLE_TICKET_PRICE).toFixed(2)}</b>
+                  </span>
+                </div>
+              )}
+            </>
           ) : (
             <p className="text-[10px] opacity-70">Round in progress. Sit tight…</p>
           )}
+        </div>
 
-          {meSlots.length > 0 && (
-            <div className="bg-arena-lemon border-4 border-arena-ink shadow-pixelSm p-2 text-[10px] flex items-center justify-between">
-              <span>
-                YOUR SLOTS: <b>{meSlots.length}</b> · ODDS{" "}
-                <b>{(meSlots.length * equalOdds).toFixed(1)}%</b>
-              </span>
-              <span>
-                SPENT <b>${(meSlots.length * RAFFLE_TICKET_PRICE).toFixed(2)}</b>
-              </span>
-            </div>
+        <div className="pixel-card p-5 flex flex-col gap-2">
+          <h3 className="text-[12px] tracking-wider">LAST 5 WINNERS</h3>
+          {recentWinners.wheel.length === 0 ? (
+            <p className="text-[9px] opacity-60">No spins yet this session.</p>
+          ) : (
+            recentWinners.wheel.map((w) => (
+              <div
+                key={w.id}
+                className={`flex items-center gap-2 text-[10px] border-2 border-arena-ink p-2 ${
+                  w.isMe ? "bg-arena-lemon" : w.houseWin ? "bg-arena-coral" : "bg-white"
+                }`}
+              >
+                <span
+                  className="w-4 h-4 border-2 border-arena-ink"
+                  style={{ background: w.badge.hex }}
+                />
+                <span className="flex-1 truncate">
+                  {w.houseWin ? "🔥 HOUSE" : w.isMe ? "★ YOU" : w.winnerLabel}
+                </span>
+                <span className="opacity-70">{w.badge.name}</span>
+                <span className="pixel-chip">{w.pot.toFixed(2)} SOL</span>
+              </div>
+            ))
           )}
         </div>
 
@@ -427,8 +584,8 @@ export function WheelGame() {
                 {s.owner?.isMe ? "★ " : ""}
                 {s.owner ? s.owner.name : "— EMPTY (house) —"}
               </span>
-              <span className="opacity-70">
-                {s.owner ? `$${RAFFLE_TICKET_PRICE.toFixed(2)}` : "—"}
+              <span className="opacity-70 text-[9px]">
+                {s.owner ? `${RAFFLE_TICKET_PRICE.toFixed(2)} SOL` : "—"}
               </span>
               <span className="pixel-chip">{equalOdds.toFixed(1)}%</span>
             </div>

@@ -27,7 +27,7 @@ export default function Page() {
           emoji="🎡"
           bg="bg-arena-pink"
           href="/wheel"
-          blurb="Up to 15 players. $2 ticket, equal slices, equal odds. One spin, one winner takes the pot."
+          blurb="15 colour slots. 0.05 SOL per ticket, equal odds. One spin every 2 minutes."
         />
         <RoomCard
           title="COIN FLIP"
@@ -43,7 +43,7 @@ export default function Page() {
           emoji="🐕"
           bg="bg-arena-lavender"
           href="/race"
-          blurb="8 dogs sprint to the finish. Stack 0.1 SOL bets across the field. Winners split 95% of the pool."
+          blurb="15 dogs, 15 lanes. One ticket per dog. Race auto-starts every 2 minutes."
         />
       </section>
 

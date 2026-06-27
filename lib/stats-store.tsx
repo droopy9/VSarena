@@ -17,11 +17,25 @@ export type Stats = {
   roundsPlayed: number;
 };
 
+export type WinnerRecord = {
+  id: string;
+  game: "wheel" | "race";
+  pot: number;
+  unit: "USD" | "SOL";
+  winnerLabel: string;
+  isMe: boolean;
+  houseWin: boolean;
+  badge: { name: string; hex: string };
+  ts: number;
+};
+
 type StatsContextValue = Stats & {
   recordRound: (
     pot: number,
     opts?: { houseWin?: boolean },
   ) => { winnerPayout: number; burn: number };
+  recordWinner: (rec: Omit<WinnerRecord, "id" | "ts">) => void;
+  recentWinners: { wheel: WinnerRecord[]; race: WinnerRecord[] };
 };
 
 const StatsContext = createContext<StatsContextValue | null>(null);
@@ -35,6 +49,27 @@ const SEED: Stats = {
 
 export function StatsProvider({ children }: { children: ReactNode }) {
   const [stats, setStats] = useState<Stats>(SEED);
+  const [recentWinners, setRecentWinners] = useState<{
+    wheel: WinnerRecord[];
+    race: WinnerRecord[];
+  }>({ wheel: [], race: [] });
+
+  const recordWinner = useCallback(
+    (rec: Omit<WinnerRecord, "id" | "ts">) => {
+      setRecentWinners((prev) => {
+        const entry: WinnerRecord = {
+          ...rec,
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          ts: Date.now(),
+        };
+        return {
+          ...prev,
+          [rec.game]: [entry, ...prev[rec.game]].slice(0, 5),
+        };
+      });
+    },
+    [],
+  );
 
   const recordRound = useCallback(
     (pot: number, opts?: { houseWin?: boolean }) => {
@@ -54,8 +89,8 @@ export function StatsProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<StatsContextValue>(
-    () => ({ ...stats, recordRound }),
-    [stats, recordRound],
+    () => ({ ...stats, recordRound, recordWinner, recentWinners }),
+    [stats, recordRound, recordWinner, recentWinners],
   );
 
   return <StatsContext.Provider value={value}>{children}</StatsContext.Provider>;

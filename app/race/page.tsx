@@ -8,12 +8,13 @@ export default function RacePage() {
           ROOM 03 · DOG RACE
         </span>
         <h1 className="text-[20px] md:text-[28px] tracking-wider">
-          8 DOGS. ONE FINISH LINE.
+          15 DOGS. ONE FINISH LINE.
         </h1>
         <p className="text-[10px] md:text-[11px] opacity-80 max-w-2xl leading-relaxed">
-          Pick a dog, drop 0.1 SOL. Stack as many bets on as many dogs as you
-          like. Winners split 95% of the pool by their share of bets on the
-          winning dog. The other 5% buys back $ARENA and burns it forever.
+          Pick a dog, buy a 0.1 SOL ticket. One bettor per dog, one ticket per
+          wallet per round. Race auto-starts every 2 minutes. Winner takes 95%,
+          5% buys back $ARENA. If an empty lane wins, the entire pot is sent to
+          the treasury for buybacks.
         </p>
       </header>
       <RaceGame />

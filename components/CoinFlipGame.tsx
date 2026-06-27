@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { TOKEN_TICKER } from "@/lib/config";
+import { TOKEN_TICKER, SOL_USD } from "@/lib/config";
 import { useStats } from "@/lib/stats-store";
 
 type Side = "HEADS" | "TAILS";
@@ -34,7 +34,7 @@ function shortAddress(addr?: string) {
 
 function seedRooms(): Room[] {
   const out: Room[] = [];
-  const bets = [0.25, 0.5, 1, 2, 5, 10];
+  const bets = [0.05, 0.1, 0.25, 0.5, 1, 2];
   for (let i = 0; i < 5; i++) {
     out.push({
       id: newId(),
@@ -134,7 +134,7 @@ export function CoinFlipGame() {
       setRooms((cur) => {
         const openBotRooms = cur.filter((r) => r.status === "open" && !r.isMine);
         if (openBotRooms.length >= 6) return cur;
-        const bets = [0.1, 0.5, 1, 2, 5, 10, 25];
+        const bets = [0.05, 0.1, 0.25, 0.5, 1, 2, 5];
         return [
           {
             id: newId(),
@@ -156,15 +156,18 @@ export function CoinFlipGame() {
       <div className="flex flex-col gap-4">
         <div className="pixel-card p-5 flex flex-col gap-3">
           <h3 className="text-[12px] tracking-wider">CREATE A ROOM</h3>
-          <label className="text-[10px]">YOUR BET ($)</label>
+          <label className="text-[10px]">YOUR BET (SOL)</label>
           <input
             type="number"
-            min="0.1"
-            step="0.1"
+            min="0.05"
+            step="0.05"
             value={bet}
             onChange={(e) => setBet(e.target.value)}
             className="pixel-input"
           />
+          <span className="text-[9px] opacity-70">
+            ≈ ${(Number(bet || 0) * SOL_USD).toFixed(2)}
+          </span>
           <label className="text-[10px]">YOUR SIDE</label>
           <div className="grid grid-cols-2 gap-2">
             {(["HEADS", "TAILS"] as Side[]).map((s) => (
@@ -250,6 +253,8 @@ function RoomRow({
   const pot = room.bet * 2;
   const payout = pot * 0.95;
   const burn = pot * 0.05;
+  const fmtSol = (n: number) => n.toFixed(2);
+  const fmtUsd = (n: number) => (n * SOL_USD).toFixed(2);
   return (
     <div
       className={`border-4 border-arena-ink p-3 flex flex-col gap-2 ${
@@ -266,23 +271,23 @@ function RoomRow({
           {room.hostSide === "HEADS" ? "👑 H" : "🌀 T"}
         </span>
         <span className="text-[10px]">
-          BET <b>${room.bet.toFixed(2)}</b>
+          BET <b>{fmtSol(room.bet)} SOL</b>
         </span>
       </div>
 
       {room.status === "open" && (
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center flex-wrap">
           {room.isMine ? (
             <button onClick={onCancel} className="pixel-btn !bg-arena-coral !py-2">
               CANCEL
             </button>
           ) : (
             <button onClick={onJoin} className="pixel-btn !bg-arena-mint !py-2">
-              JOIN · ${room.bet.toFixed(2)} ▶
+              JOIN · {fmtSol(room.bet)} SOL ▶
             </button>
           )}
-          <span className="text-[9px] opacity-60 self-center">
-            POT ${pot.toFixed(2)} · WIN ${payout.toFixed(2)}
+          <span className="text-[9px] opacity-60">
+            POT {fmtSol(pot)} SOL (≈ ${fmtUsd(pot)}) · WIN {fmtSol(payout)} SOL
           </span>
         </div>
       )}
@@ -307,7 +312,8 @@ function RoomRow({
             </b>
           </div>
           <div className="opacity-80">
-            PAYOUT ${payout.toFixed(2)} · BURN {burn.toFixed(4)} {TOKEN_TICKER}
+            PAYOUT {fmtSol(payout)} SOL (≈ ${fmtUsd(payout)}) · BURN{" "}
+            {burn.toFixed(4)} {TOKEN_TICKER}
           </div>
         </div>
       )}

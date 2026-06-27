@@ -6,7 +6,7 @@ import { SiteHeader } from "@/components/SiteHeader";
 import { ChatTeaser } from "@/components/ChatTeaser";
 
 export const metadata: Metadata = {
-  title: "ARENA — On-chain Social Gaming",
+  title: "ARCADIA — On-chain Social Gaming",
   description:
     "Bet, spin, flip, race. 95% to the winner. 5% buys back and burns $ARENA forever.",
 };
@@ -25,7 +25,7 @@ export default function RootLayout({
             <main className="max-w-6xl mx-auto px-3 md:px-6 py-6">{children}</main>
             <ChatTeaser />
             <footer className="max-w-6xl mx-auto px-6 pb-10 pt-4 text-[9px] tracking-widest opacity-70">
-              ARENA · ON-CHAIN · 95/5 · BUYBACK + BURN
+              ARCADIA · ON-CHAIN · 95/5 · BUYBACK + BURN
             </footer>
           </StatsProvider>
         </WalletProvider>

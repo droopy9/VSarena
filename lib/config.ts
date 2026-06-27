@@ -11,4 +11,9 @@ export const WHEEL_MIN_PLAYERS = 2;
 export const WHEEL_MAX_PLAYERS = 15;
 
 // Wheel raffle (fixed-ticket) mode — every entry is equal weight.
-export const RAFFLE_TICKET_PRICE = 2; // $ equivalent of SOL
+export const RAFFLE_TICKET_PRICE = 0.05; // SOL
+
+// Rough SOL→USD conversion used for the displayed USD equivalent. Bump as
+// SOL price moves; this is a UI-only constant, never used for any real
+// settlement maths.
+export const SOL_USD = 200;
